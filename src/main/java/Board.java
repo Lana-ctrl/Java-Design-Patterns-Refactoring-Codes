@@ -9,7 +9,14 @@ import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Random;
+import java.util.LinkedList;
+import core.ResourceManager;
+
+
+
+
 
 import javax.swing.JPanel;
 
@@ -43,6 +50,14 @@ public class Board extends JPanel implements Runnable, Commons {
 
     private Thread animator;
 
+
+    // for decorator pattern
+    private List<PowerUp> powerUps;
+    private static final int POWERUP_SPAWN_CHANCE_PERCENT = 80; // when alien dies, 20% chance to spawn powerup  
+
+    //for facade pattern
+    private GameEngine gameEngine;
+
     /*
      * Constructor
      */
@@ -51,6 +66,8 @@ public class Board extends JPanel implements Runnable, Commons {
         setFocusable(true);
         d = new Dimension(BOARD_WIDTH, BOARD_HEIGTH);
         setBackground(Color.black);
+       // for facade 
+        gameEngine = new GameEngine(this);
 
         gameInit();
         setDoubleBuffered(true);
@@ -63,6 +80,8 @@ public class Board extends JPanel implements Runnable, Commons {
 
     public void gameInit() {
         aliens = new ArrayList<>();
+        powerUps = new LinkedList<>();
+
 
         // Load the alien image once
         BufferedImage alienImage = ResourceManager.getInstance().loadImage(ALIEN_IMAGE);
@@ -79,6 +98,10 @@ public class Board extends JPanel implements Runnable, Commons {
 
         player = new Player();
         shot = new Shot();
+
+        // Force a PowerUp spawn at start for testing
+        powerUps.add(new PowerUp(270, 300)); // adjust coordinates if needed
+
 
         if (animator == null || !ingame) {
             animator = new Thread(this);
@@ -98,15 +121,39 @@ public class Board extends JPanel implements Runnable, Commons {
     }
 
     public void drawPlayer(Graphics g) {
-        if (player.isVisible()) {
-            g.drawImage(player.getImage(), player.getX(), player.getY(), this);
-        }
-        if (player.isDying()) {
-            player.die();
-            havewon = false;
-            ingame = false;
-        }
+    if (player.isVisible()) {
+        g.drawImage(player.getImage(), player.getX(), player.getY(), this);
     }
+
+    // --- BLUE SHIELD EFFECT when decorator is active ---
+    if (player instanceof ShieldedPlayer) {
+        int px = player.getX();
+        int py = player.getY();
+        int w = PLAYER_WIDTH;
+        int h = PLAYER_HEIGHT;
+
+        java.awt.Graphics2D g2 = (java.awt.Graphics2D) g;
+        g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                            java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+
+        // glowing blue ring
+        g2.setColor(new java.awt.Color(0, 150, 255, 180)); // bright blue
+        g2.setStroke(new java.awt.BasicStroke(4));
+        g2.drawOval(px - 6, py - 6, w + 12, h + 12);
+
+        // inner glow effect
+        g2.setColor(new java.awt.Color(0, 200, 255, 80));
+        g2.fillOval(px - 4, py - 4, w + 8, h + 8);
+    }
+
+    if (player.isDying()) {
+        player.die();
+        havewon = false;
+        ingame = false;
+    }
+}
+
+
 
     public void drawGameEnd(Graphics g) {
         g.drawImage(gameend.getImage(), 0, 0, this);
@@ -126,6 +173,17 @@ public class Board extends JPanel implements Runnable, Commons {
             }
         }
     }
+// for decorator pattern 
+    public void drawPowerUps(Graphics g) {
+    if (powerUps == null) return;
+    for (PowerUp pu : powerUps) {
+        if (!pu.isCollected()) {
+            if (pu.getImage() != null)
+                g.drawImage(pu.getImage(), pu.getX(), pu.getY(), this);
+        }
+    }
+}
+
 
     public void paint(Graphics g) {
         super.paint(g);
@@ -139,7 +197,10 @@ public class Board extends JPanel implements Runnable, Commons {
             drawAliens(g);
             drawPlayer(g);
             drawShot(g);
+            // for decorator pattern
             drawBombing(g);
+            drawPowerUps(g); 
+
         }
 
         Toolkit.getDefaultToolkit().sync();
@@ -172,104 +233,175 @@ public class Board extends JPanel implements Runnable, Commons {
                 BOARD_WIDTH / 2);
     }
 
-    public void animationCycle() {
-        if (deaths == NUMBER_OF_ALIENS_TO_DESTROY) {
-            ingame = false;
-            message = "Parabéns! Você salvou a galáxia!";
+// adjusted for decorator pattern 
+public void animationCycle() {
+
+    if (deaths == NUMBER_OF_ALIENS_TO_DESTROY) {
+        ingame = false;
+        message = "Parabéns! Você salvou a galáxia!";
+    }
+
+    // --- DECORATOR UNWRAP ---
+    // If player is decorated (ShieldedPlayer), check if the shield expired
+    if (player instanceof PlayerDecorator) {
+        PlayerDecorator pd = (PlayerDecorator) player;
+        if (pd.isExpired()) {
+            player = pd.getWrappedPlayer(); // unwrap back to normal player
         }
+    }
 
-        // Player
-        player.act();
+    // --- PLAYER MOVEMENT ---
+    player.act();
 
-        // Shot
-        if (shot.isVisible()) {
-            int shotX = shot.getX();
-            int shotY = shot.getY();
-            for (Alien alien : aliens) {
-                if (alien.isVisible() && shot.isVisible()) {
-                    int alienX = alien.getX();
-                    int alienY = alien.getY();
-                    if (shotX >= alienX && shotX <= (alienX + ALIEN_WIDTH) &&
-                        shotY >= alienY && shotY <= (alienY + ALIEN_HEIGHT)) {
+    // --- SHOT LOGIC ---
+    if (shot.isVisible()) {
+        int shotX = shot.getX();
+        int shotY = shot.getY();
 
-                        BufferedImage explosionImage = ResourceManager.getInstance().loadImage(EXPLOSION_IMAGE);
-                        alien.setImage(explosionImage);
-                        alien.setDying(true);
-                        deaths++;
-                        shot.die();
+        for (Alien alien : aliens) {
+            if (alien.isVisible() && shot.isVisible()) {
+                int alienX = alien.getX();
+                int alienY = alien.getY();
+
+                if (shotX >= alienX && shotX <= (alienX + ALIEN_WIDTH) &&
+                    shotY >= alienY && shotY <= (alienY + ALIEN_HEIGHT)) {
+
+                    BufferedImage explosionImage = ResourceManager.getInstance().loadImage(EXPLOSION_IMAGE);
+                    alien.setImage(explosionImage);
+                    alien.setDying(true);
+                    deaths++;
+                    shot.die();
+
+                    // --- POWERUP SPAWN LOGIC (Decorator trigger) ---
+                    int chance = new Random().nextInt(100);
+                    if (chance < 80) { // 20% chance to spawn
+                        PowerUp pu = new PowerUp(alien.getX(), alien.getY());
+                        powerUps.add(pu);
+                        System.out.println("PowerUp spawned at " + pu.getX() + "," + pu.getY());
+
                     }
                 }
             }
-
-            int y = shot.getY() - 8;
-            if (y < 0) shot.die();
-            else shot.setY(y);
         }
 
-        // Aliens movement
-        for (Alien a : aliens) {
-            int x = a.getX();
-            if (x >= BOARD_WIDTH - BORDER_RIGHT && direction != -1) {
-                direction = -1;
-                for (Alien a2 : aliens) {
-                    a2.setY(a2.getY() + GO_DOWN);
-                }
-            }
-            if (x <= BORDER_LEFT && direction != 1) {
-                direction = 1;
-                for (Alien a2 : aliens) {
-                    a2.setY(a2.getY() + GO_DOWN);
-                }
+        int y = shot.getY() - 8;
+        if (y < 0) shot.die();
+        else shot.setY(y);
+    }
+
+    // --- ALIEN MOVEMENT ---
+    for (Alien a : aliens) {
+        int x = a.getX();
+        if (x >= BOARD_WIDTH - BORDER_RIGHT && direction != -1) {
+            direction = -1;
+            for (Alien a2 : aliens) {
+                a2.setY(a2.getY() + GO_DOWN);
             }
         }
-
-        for (Alien alien : aliens) {
-            if (alien.isVisible()) {
-                int y = alien.getY();
-                if (y > GROUND - ALIEN_HEIGHT) {
-                    havewon = false;
-                    ingame = false;
-                    message = "Aliens estão invadindo a galáxia!";
-                }
-                alien.act(direction);
+        if (x <= BORDER_LEFT && direction != 1) {
+            direction = 1;
+            for (Alien a2 : aliens) {
+                a2.setY(a2.getY() + GO_DOWN);
             }
         }
+    }
 
-        // Bombs
-        Random generator = new Random();
-        for (Alien a : aliens) {
-            int chance = generator.nextInt(15);
-            Bomb b = a.getBomb();
-            if (chance == CHANCE && a.isVisible() && b.isDestroyed()) {
-                b.setDestroyed(false);
-                b.setX(a.getX());
-                b.setY(a.getY());
+    for (Alien alien : aliens) {
+        if (alien.isVisible()) {
+            int y = alien.getY();
+            if (y > GROUND - ALIEN_HEIGHT) {
+                havewon = false;
+                ingame = false;
+                message = "Aliens estão invadindo a galáxia!";
+            }
+            alien.act(direction);
+        }
+    }
+
+    // --- BOMB LOGIC ---
+    Random generator = new Random();
+    for (Alien a : aliens) {
+        int chance = generator.nextInt(15);
+        Bomb b = a.getBomb();
+        if (chance == CHANCE && a.isVisible() && b.isDestroyed()) {
+            b.setDestroyed(false);
+            b.setX(a.getX());
+            b.setY(a.getY());
+        }
+
+        int bombX = b.getX();
+        int bombY = b.getY();
+        int playerX = player.getX();
+        int playerY = player.getY();
+
+        if (player.isVisible() && !b.isDestroyed()) {
+            
+           if (bombX >= playerX && bombX <= (playerX + PLAYER_WIDTH) &&
+                 bombY >= playerY && bombY <= (playerY + PLAYER_HEIGHT)) {
+
+                        BufferedImage explosionImage =
+                            ResourceManager.getInstance().loadImage(EXPLOSION_IMAGE);
+
+                        player.setImage(explosionImage);
+                        player.setDying(true);     // ShieldedPlayer intercepts this call
+                        b.setDestroyed(true);
+                    }
+        }
+
+
+        if (!b.isDestroyed()) {
+            b.setY(b.getY() + 1);
+            if (b.getY() >= GROUND - BOMB_HEIGHT) {
+                b.setDestroyed(true);
+            }
+        }
+    }
+
+    // --- POWERUP LOGIC (movement + pickup) ---
+    if (powerUps != null && !powerUps.isEmpty()) {
+        Iterator<PowerUp> it = powerUps.iterator();
+        while (it.hasNext()) {
+            PowerUp pu = it.next();
+
+            if (pu.isCollected()) {
+                it.remove();
+                continue;
             }
 
-            int bombX = b.getX();
-            int bombY = b.getY();
+            pu.act(); // move down slowly
+
+            // remove if it falls below ground
+            if (pu.getY() > GROUND) {
+                it.remove();
+                continue;
+            }
+
+            // collision with player
+            int puX = pu.getX();
+            int puY = pu.getY();
             int playerX = player.getX();
             int playerY = player.getY();
 
-            if (player.isVisible() && !b.isDestroyed()) {
-                if (bombX >= playerX && bombX <= (playerX + PLAYER_WIDTH) &&
-                    bombY >= playerY && bombY <= (playerY + PLAYER_HEIGHT)) {
+            if (player.isVisible() &&
+                puX >= playerX && puX <= (playerX + PLAYER_WIDTH) &&
+                puY >= playerY && puY <= (playerY + PLAYER_HEIGHT)) {
 
-                    BufferedImage explosionImage = ResourceManager.getInstance().loadImage(EXPLOSION_IMAGE);
-                    player.setImage(explosionImage);
-                    player.setDying(true);
-                    b.setDestroyed(true);
-                }
-            }
+                // collect the powerup
+                pu.setCollected(true);
+                it.remove();
 
-            if (!b.isDestroyed()) {
-                b.setY(b.getY() + 1);
-                if (b.getY() >= GROUND - BOMB_HEIGHT) {
-                    b.setDestroyed(true);
+                // apply shield decorator if not already shielded
+                if (!(player instanceof PlayerDecorator)) {
+                    player = new ShieldedPlayer(player);
+                    System.out.println("Shield activated!");
+                } else {
+                    System.out.println("Already shielded!");
                 }
             }
         }
     }
+}
+
 
     public void run() {
         long beforeTime = System.currentTimeMillis();
@@ -288,18 +420,20 @@ public class Board extends JPanel implements Runnable, Commons {
         gameOver();
     }
 
-    private class TAdapter extends KeyAdapter {
-        public void keyReleased(KeyEvent e) { player.keyReleased(e); }
+        private class TAdapter extends KeyAdapter {
+        public void keyReleased(KeyEvent e) { 
+            gameEngine.handleKeyRelease(e); 
+        }
         public void keyPressed(KeyEvent e) {
-            player.keyPressed(e);
-            int x = player.getX();
-            int y = player.getY();
-
-            if (ingame) {
-                if (e.getKeyCode() == KeyEvent.VK_SPACE && !shot.isVisible()) {
-                    shot = new Shot(x, y);
-                }
-            }
+            gameEngine.handleKeyPress(e);
         }
     }
+        // === FACADE PATTERN GETTERS ===
+    public boolean isIngame() { return ingame; }
+    public boolean hasWon() { return havewon; }
+    public String getMessage() { return message; }
+    public ArrayList<Alien> getAliens() { return aliens; }
+    public Player getPlayer() { return player; }
+    public Shot getShot() { return shot; }
+    public void setShot(Shot shot) { this.shot = shot; }
 }
